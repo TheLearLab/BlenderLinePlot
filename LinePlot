@@ -1,0 +1,637 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Sun Jan 29 14:46:14 2023
+
+Ok, so the idea is as follows:
+    1. Read data
+    2. Make axes... 
+        - default is that the length of the axis will be 1 m, but there is an option to scale it
+        - also, default is to have axes cross at zero, but can include an option for that
+        - IF zero is included, the axes cross there.  Otherwise, place the axis cross at the MINIMUM value
+        
+    3. Plot data
+        - include options to turn off points and lines and to select the shape. 
+
+@author: benjaminlear
+"""
+
+#%% import the stuff we will need
+import bpy
+import csv
+from mathutils import Color
+#import math
+
+#first, let us clear out the collection we start with...this also removes default light, camera, cube
+bpy.data.collections.remove(bpy.data.collections["Collection"])
+#make sure we create and have a reference to the standard collection
+Collection = (bpy.data.collections.get("Collection") or bpy.data.collections.new("Collection"))
+# add the collection to the scene
+try:
+    bpy.context.scene.collection.children.link(Collection)
+except:
+    pass
+
+#create new collection for this plot
+Plot = (bpy.data.collections.get("Plot") or bpy.data.collections.new("Plot"))
+# add the collection to the scene
+try:
+    bpy.context.scene.collection.children.link(Plot)
+except:
+    pass
+
+#%% read the data
+'''
+-You need to be able to get any number of data sets... store the in data_sets
+-Get axes names from the first three columns
+-keep track of the minimum and maximum values for x, y, and z, across all data sets. 
+'''
+# get the data to plot. 
+path = "/Users/benjaminlear/Downloads/Test.csv" # replace with the actual path to your .csv file
+
+read_file = []
+# read the data from the .csv file
+with open(path, newline='') as csvfile:
+    reader = csv.reader(csvfile)
+    for row in reader:
+        read_file.append(row)
+
+axes_names = read_file[0][0:3] #this will naturally be strings
+n_sets = int(len(read_file[0])/3) # this is how many x,y,z data sets we have
+
+
+# now, lets get the points, and also the axes limits...
+all_points = []
+ax_lims = [[],[],[]]
+for i in range(n_sets): #this will account for how many data sets we have. 
+    all_points.append([])
+
+for row in read_file: #now, go through all the points. Ok, if there is, or is not, a header.
+   for i in range(n_sets):
+       try: # makes it so that we ignore values that cannot be converted to float
+           temp_point = list(map(float, row[i*3: i*3 + 3]))
+           all_points[i].append(temp_point)
+           #
+           #now, build up the axis limits...
+           for j in range(3): # go through each point
+               if len(ax_lims[j]) == 0: #this means that there is no entry yet, so just add it
+                   ax_lims[j].append(temp_point[j])
+               elif len(ax_lims[j]) == 1: #this means there is only one entry so far, so just ad this
+                   ax_lims[j].append(temp_point[j])
+                   ax_lims[j].sort() #sort them, so the small is first, and large is last. 
+               else: # now we are just checking to see if we found a new minimum or maximum.
+                   if temp_point[j] < ax_lims[j][0]:
+                       ax_lims[j][0] = temp_point[j]
+                   if temp_point[j] > ax_lims[j][1]:
+                       ax_lims[j][1] = temp_point[j]           
+       except:  #we are unable to convert to float. 
+           pass
+
+#
+# now, we can translate and scale data, as needed....
+#
+
+ax_cents = [0, 0, 0] # the position on which the axes will be place. We will subtract this from the x, y, and z, values. 
+ax_cents = [ax_lims[0][0], ax_lims[1][0], 0]
+ax_norms = [ # this is what each point is divided by
+    abs(ax_lims[0][1] - ax_lims[0][0]),
+    abs(ax_lims[1][1] - ax_lims[1][0]),
+    abs(ax_lims[2][1] - ax_lims[2][0])
+            ]
+ax_scales = [2, 1, 1] # how to scale after normalization
+for series in all_points:
+    for point in series:
+        for i in range(3): #go through and adjust
+            point[i] = (point[i] - ax_cents[i])/ax_norms[i] * ax_scales[i]
+
+#%% plot the data
+
+# we need to go through all the data
+di = 0
+for series in all_points:
+    di = di + 1
+    #make the edges... just need to connect one after another. 
+    edges = [] #build the edges for this data...
+    for i in range(len(series)):
+        edges.append([i, i + 1])
+    edges.pop() #remove the last pair, since this edge does not exist. 
+    #
+    #generate a mesh
+    #
+    # create a new mesh object to hold the point cloud
+    # the use of "OR" means we will not keep creating the exact same objects...
+    Dmesh = (bpy.data.meshes.get(f"Series {di}") or bpy.data.meshes.new(f"Series {di}"))
+    #need to add vertices, but not if we already have them....
+    #OK NEED TO FIGURE OUT HOW TO DELETE AND START OVER... that will be cleaner
+    try:
+        # this will work, IF we have a new mesh (should look for a way to build it)
+        Dmesh.from_pydata(series, edges, []) # use points, no edges, no faces...
+    except: 
+        # this will update points
+        for i in enumerate(series): # go through each point in the series
+            bpy.data.meshes[f"Series {di}"].vertices[i[0]].co = i[1] #update the mesh cordiantes to reflect this. 
+    # create a new object to hold the mesh
+    # the use of "OR" means we will not keep creating the exact same objects...
+    # but this is not working quite as expected yet....
+    try: # don't need to link again, if it already is...
+        Plot.objects.link(bpy.data.objects.get(f"Series {di}") or bpy.data.objects.new(f"Series {di}", Dmesh))
+    except:
+        pass
+    #Data = (bpy.data.objects.get(f"Series {di}") or bpy.data.objects.new(f"Series {di}", Dmesh))
+    # add object to collection Plot
+    # Plot.objects.link(Data)
+
+    
+# data material
+c = Color() # for converting from HSV to RGB
+# make a material for EACH data series. 
+for i in range(n_sets):
+    i = i + 1
+    #
+    # either get the material if it exists, or make it, if it don't
+    D_mat = (bpy.data.materials.get(f"Series {i}") or 
+       bpy.data.materials.new(f"Series {i}"))
+    #D_mat = bpy.data.materials.new(name = f"Series {i}")
+    D_mat.use_nodes = True
+    D_mat_nodes = D_mat.node_tree.nodes
+    #
+    # set the default values.
+    c.hsv = 1 / n_sets * (i - 1), 1, 1 #specify HSV, cycling though color wheel.  Will only work for like 4-5 colors. 
+    temp_c = list(c) #convert to list
+    temp_c.append(1.0)# add the alpha channel
+    D_mat_nodes["Principled BSDF"].inputs["Base Color"].default_value = temp_c #cyan
+    D_mat_nodes["Principled BSDF"].inputs["Roughness"].default_value = 0.33 #make a bit shinier
+    #
+    #in case we want to link things up....
+    D_mat_links = D_mat.node_tree.links
+    #
+
+
+#
+#create a tree that will be used for data modifiers. 
+#
+dataline_tree = (bpy.data.node_groups.get('Data') or bpy.data.node_groups.new('Data', 'GeometryNodeTree'))
+
+#create the input node
+inNode = dataline_tree.inputs
+inNode.new(type = "NodeSocketGeometry", name = "Geometry")
+dataline_tree.nodes.new('NodeGroupInput')
+
+#create the output node
+outNode = dataline_tree.outputs
+outNode.new(type = "NodeSocketGeometry", name = "Geometry")
+dataline_tree.nodes.new('NodeGroupOutput')
+
+#add the nodes we need in beetween
+dataline_tree.nodes.new('GeometryNodeMeshToCurve')
+dataline_tree.nodes.new('GeometryNodeCurveToMesh')
+dataline_tree.nodes.new('GeometryNodeCurvePrimitiveCircle') #this is "curve circle"
+dataline_tree.nodes.new('GeometryNodeSetMaterial')
+
+
+#now that we have created all the nodes, we create a variable for them...
+nodes = dataline_tree.nodes #get a variable for the nodes...
+
+#set default values
+nodes["Curve Circle"].inputs[4].default_value = 0.05 # set the size
+nodes["Curve to Mesh"].inputs[2].default_value = True # set to fill ends of line
+
+#arrange nodes
+nodes["Mesh to Curve"].location.x += 200
+nodes["Curve to Mesh"].location.x += 400
+nodes['Set Material'].location.x += 600
+nodes["Group Output"].location.x += 800
+nodes["Curve Circle"].location.x += 200
+nodes["Curve Circle"].location.y -= 200
+
+
+# connect
+links = dataline_tree.links # get a variable for the links...
+#connect input and output nodes
+links.new(nodes["Group Input"].outputs["Geometry"], nodes['Mesh to Curve'].inputs["Mesh"])
+links.new(nodes["Mesh to Curve"].outputs["Curve"], nodes["Curve to Mesh"].inputs["Curve"]) 
+links.new(nodes["Curve Circle"].outputs["Curve"], nodes["Curve to Mesh"].inputs["Profile Curve"]) 
+links.new(nodes["Curve to Mesh"].outputs["Mesh"], nodes["Set Material"].inputs["Geometry"])
+links.new(nodes["Set Material"].outputs["Geometry"], nodes["Group Output"].inputs["Geometry"])
+
+
+#
+# make the geometry nodes...
+#
+#add the geometry node modifier to the object
+#D_mod = Data.modifiers.new("Data", "NODES")
+
+#
+# Now, assign this to the objects of interest... 
+#
+
+for i in range(n_sets):
+    #check to see if the modifier already exists..., this way we don't keep making new ones. 
+    try:
+        bpy.data.objects.get(f"Series {i+1}").modifiers.remove(bpy.data.objects.get(f"Series {i+1}").modifiers.get(f"Data {i + 1}"))
+    except:
+        pass
+    #add modifier to the object you want. 
+    D_mod = (bpy.data.objects.get(f"Series {i+1}").modifiers.get(f"Data {i + 1}") or bpy.data.objects.get(f"Series {i+1}").modifiers.new(f"Data {i + 1}", "NODES"))
+    #
+    #assign the appropriate node tree to the modifier and then rename...
+    # and make any individual changes I want to make...
+    #
+    # NEED TO CHECK AND REMOVE IF THE NODETREE EXISTS...
+    try:
+        #look in the "node_groups" data, then specify the node to be removed.
+        bpy.data.node_groups.remove(bpy.data.node_groups[f'Data nodes {i+1}'])
+    except:
+        pass
+    #
+    D_mod.node_group = dataline_tree.copy()
+    D_mod.node_group.name = f"Data nodes {i+1}"
+    #bpy.data.node_groups['Data'].nodes["Set Material"].inputs["Material"].default_value = D_mat  #<- set the material
+    bpy.data.node_groups[f'Data nodes {i+1}'].nodes["Set Material"].inputs["Material"].default_value =  bpy.data.materials.get(f"Series {i+1}")#<- set the material
+
+
+#
+# design node trees
+#
+#create an empty node tree that is geometry nodes
+#empty_tree = bpy.data.node_groups.new('GeometryNodes', 'GeometryNodeTree')
+
+#%% render the axes
+# will we include labels????
+
+ax_names = ["x", "y", "z"]
+# scale them by the scale...*0.05 on a side?
+buffer = 0.05
+ax_points = [
+    [[0, 0, 0], [1, 0, 0]],
+    [[0, 0, 0], [0, 1, 0]],
+    [[0, 0, 0], [0, 0, 1]]
+    ]
+for i in range(3):
+    ax_points[i][0][i] = -1 * buffer  * ax_scales[i]
+    ax_points[i][1][i] = (1 + buffer) * ax_scales[i]
+    
+
+#
+# Make the axes meshes... again to be passed to geometry nodes
+#
+for name, scale, count in zip(ax_names, ax_scales, [0, 1, 2]):
+    #make the starting points
+    ax_start = [0, 0, 0]
+    ax_end = [0, 0, 0]
+    #replace the corect index with the actual limits, adjusted for the scalling and range
+    ax_start[count] = -0.05 * scale
+    ax_end[count] = scale + scale * 0.05
+    #make the mesh... do it this way so we can have variables for each axis. 
+    try: #try to remove the mesh if it exists
+        bpy.data.meshes.remove(bpy.data.meshes[f"{name}-axis"])
+    except:
+        pass
+    #
+    try: #try to remove the object, if it exists. 
+        bpy.data.objects.remove(bpy.data.objects[f"{name}-axis"])
+    except:
+        pass
+    #    
+    if name == "x":
+        x_mesh = bpy.data.meshes.new(f"{name}-axis")
+        #add vertices to the mesh
+        x_mesh.from_pydata([ax_start, ax_end], [[0,1]], [])
+        # create object to hold the mesh
+        x_ax = bpy.data.objects.new(f"{name}-axis", x_mesh)
+        # add object to the plot collection
+        Plot.objects.link(x_ax)
+    if name == "y":
+        y_mesh = bpy.data.meshes.new(f"{name}-axis")
+        #add vertices to the mesh
+        y_mesh.from_pydata([ax_start, ax_end], [[0,1]], [])
+        # create object to hold the mesh
+        y_ax = bpy.data.objects.new(f"{name}-axis", y_mesh)
+        # add object to the plot collection
+        Plot.objects.link(y_ax)
+    if name == "z":
+        z_mesh = bpy.data.meshes.new(f"{name}-axis")
+        #add vertices to the mesh
+        z_mesh.from_pydata([ax_start, ax_end], [[0,1]], [])
+        # create object to hold the mesh
+        z_ax = bpy.data.objects.new(f"{name}-axis", z_mesh)
+        # add object to the plot collection
+        Plot.objects.link(z_ax)
+
+# make the material
+# data material
+c = Color() # for converting from HSV to RGB
+# make a material for EACH data series. 
+for name in ax_names:
+    #
+    # either get the material if it exists, or make it, if it don't
+    ax_mat = (bpy.data.materials.get(f"{name}-axis") or 
+       bpy.data.materials.new(f"{name}-axis"))
+    #
+    ax_mat.use_nodes = True
+    ax_mat_nodes = ax_mat.node_tree.nodes
+    #
+    # set the default values.
+    if name == "x":
+        c.hsv = 0.0, 0.8, 0.4 
+    elif name == "y":
+        c.hsv = 0.33, 0.8, 0.4 
+    elif name == "z":
+        c.hsv = 0.66, 0.8, 0.4 
+    temp_c = list(c) #convert to list
+    temp_c.append(1.0)# add the alpha channel
+    ax_mat_nodes["Principled BSDF"].inputs["Base Color"].default_value = temp_c #cyan
+    ax_mat_nodes["Principled BSDF"].inputs["Roughness"].default_value = 1 # make it not reflective
+    #
+    #in case we want to link things up....
+    ax_mat_links = ax_mat.node_tree.links
+    #
+
+# make the nodes
+#
+#create a tree that will create only lines for axes
+#will need to create a few different ones for each axis, but this is ok. 
+#
+for name, scale in zip(ax_names, ax_scales):
+    # remove the nodetree, if it exists...
+    try:
+        bpy.data.node_groups.remove(bpy.data.node_groups['axis'])
+    except:
+        pass
+    #
+    axes_tree = bpy.data.node_groups.new('axis', 'GeometryNodeTree')
+    #
+    #create the input node
+    inNode = axes_tree.inputs
+    inNode.new(type = "NodeSocketGeometry", name = "Geometry")
+    axes_tree.nodes.new('NodeGroupInput')
+    #
+    #create the output node
+    outNode = axes_tree.outputs
+    outNode.new(type = "NodeSocketGeometry", name = "Geometry")
+    axes_tree.nodes.new('NodeGroupOutput')
+    #                           
+    #add the nodes we need in beetween
+    # top row...
+    axes_tree.nodes.new('GeometryNodeMeshToCurve')
+    axes_tree.nodes.new('GeometryNodeCurveToMesh')
+    axes_tree.nodes.new('GeometryNodeJoinGeometry')
+    axes_tree.nodes.new('GeometryNodeSetShadeSmooth')
+    axes_tree.nodes.new('GeometryNodeSetMaterial')
+    #
+    #2nd row
+    axes_tree.nodes.new('GeometryNodeCurvePrimitiveCircle') #this is "curve circle"
+    #
+    #3rd row
+    axes_tree.nodes.new('ShaderNodeValue')# value
+    mult1 = axes_tree.nodes.new('ShaderNodeMath')#multiply
+    mult1.operation = 'MULTIPLY'#change to multiply# multiply
+    mult2 = axes_tree.nodes.new('ShaderNodeMath')#multiply
+    mult2.operation = 'MULTIPLY'#change to multiply#multiply
+    axes_tree.nodes.new('GeometryNodeMeshCone')# cone
+    axes_tree.nodes.new('GeometryNodeInstanceOnPoints')# instance on points
+    #
+    #4th row
+    axes_tree.nodes.new('GeometryNodeInputIndex')# value
+    mult3 = axes_tree.nodes.new('ShaderNodeMath')#multiply
+    mult3.operation = 'MULTIPLY'#change to multiply
+    sub1 = axes_tree.nodes.new('ShaderNodeMath')#subtract
+    sub1.operation = 'SUBTRACT'
+    rad1 = axes_tree.nodes.new('ShaderNodeMath')#radians
+    rad1.operation = 'RADIANS'#change to radians
+    axes_tree.nodes.new('ShaderNodeCombineXYZ')#combine xyz
+    #
+    #now that we have created all the nodes, we create a variable for them...
+    nodes = axes_tree.nodes #get a variable for the nodes...
+    #
+    #set default values
+    #nodes["Curve Circle"].inputs[4].default_value = 0.1 # set the size
+    nodes["Curve to Mesh"].inputs[2].default_value = True # set to fill ends of line
+    nodes["Value"].outputs[0].default_value = 0.025 # 1/2 the default data thickness
+    nodes["Set Material"].inputs["Material"].default_value = bpy.data.materials.get(f"{name}-axis") #set the material....
+    mult1.inputs[1].default_value = 3 # this is how much wider the cone is than the axes. 
+    mult2.inputs[1].default_value = 3 # this is how much longer the cone is than it is wide
+    mult3.inputs[1].default_value = 180 # this is how much we rotate cones by
+    #if name == "y":
+    #    sub1.inputs[1].default_value = -90 # keep this for x-axis and z-axis.  Set to -90 for the y 
+    #else:
+    #    sub1.inputs[1].default_value = 90 # keep this for x-axis and z-axis.  Set to -90 for the y 
+    #
+    #
+    #arrange nodes
+    #
+    #row 1
+    nodes["Mesh to Curve"].location.x += 200
+    nodes["Curve to Mesh"].location.x += 400
+    nodes["Join Geometry"].location.x +=600
+    nodes['Set Material'].location.x += 800
+    nodes["Set Shade Smooth"].location.x += 1000
+    nodes["Group Output"].location.x += 1200
+    #row 2
+    nodes["Curve Circle"].location.x += 200
+    nodes["Curve Circle"].location.y += -200
+    #nodes["Material"].location.x += 600
+    #nodes["Material"].location.y =+-200
+    #row 3
+    nodes["Value"].location.x += -400
+    nodes["Value"].location.y += -400
+    mult1.location.x += -200
+    mult1.location.y += -400
+    mult2.location.x += 0
+    mult2.location.y += -400
+    nodes["Cone"].location.x += 200
+    nodes["Cone"].location.y += -400
+    nodes["Instance on Points"].location.x += 400
+    nodes["Instance on Points"].location.y += -400
+    #row 4
+    nodes["Index"].location.x += -600
+    nodes["Index"].location.y += -700
+    mult3.location.x += -400
+    mult3.location.y += -700
+    sub1.location.x += -200
+    sub1.location.y += -700
+    rad1.location.x += 0
+    rad1.location.y += -700
+    nodes["Combine XYZ"].location.x += 200
+    nodes["Combine XYZ"].location.y += -700
+    #
+    #
+    # Connect nodes
+    #
+    links = axes_tree.links # get a variable for the links...
+    #connect input and output nodes
+    #row 1
+    links.new(nodes["Group Input"].outputs["Geometry"],     nodes['Mesh to Curve'].inputs["Mesh"])
+    links.new(nodes["Group Input"].outputs["Geometry"],     nodes['Instance on Points'].inputs["Points"])
+    links.new(nodes["Mesh to Curve"].outputs["Curve"],      nodes["Curve to Mesh"].inputs["Curve"]) 
+    links.new(nodes["Curve to Mesh"].outputs["Mesh"],       nodes["Join Geometry"].inputs["Geometry"])
+    links.new(nodes["Join Geometry"].outputs["Geometry"],    nodes["Set Material"].inputs["Geometry"])
+    links.new(nodes["Set Material"].outputs["Geometry"],    nodes["Set Shade Smooth"].inputs["Geometry"])
+    links.new(nodes["Set Shade Smooth"].outputs["Geometry"], nodes["Group Output"].inputs["Geometry"])
+    # row 2
+    links.new(nodes["Curve Circle"].outputs["Curve"], nodes["Curve to Mesh"].inputs["Profile Curve"]) 
+    # row 3
+    links.new(nodes["Value"].outputs["Value"], nodes["Curve Circle"].inputs["Radius"])
+    links.new(nodes["Value"].outputs["Value"], mult1.inputs[0])
+    links.new(mult1.outputs["Value"], nodes["Cone"].inputs["Radius Bottom"])
+    links.new(mult1.outputs["Value"], mult2.inputs[0])
+    links.new(mult2.outputs["Value"], nodes["Cone"].inputs["Depth"])
+    links.new(nodes["Cone"].outputs["Mesh"], nodes["Instance on Points"].inputs["Instance"])
+    links.new(nodes["Instance on Points"].outputs["Instances"], nodes["Join Geometry"].inputs["Geometry"])
+    # row 4
+    links.new(nodes["Index"].outputs["Index"], mult3.inputs[0])
+    links.new(mult3.outputs["Value"], sub1.inputs[0])
+    links.new(sub1.outputs["Value"], rad1.inputs[0])
+    #if name == 'x':
+    #    links.new(rad1.outputs["Value"], nodes["Combine XYZ"].inputs["Y"])
+    #else:
+    #    links.new(rad1.outputs["Value"], nodes["Combine XYZ"].inputs["X"])
+    links.new(nodes["Combine XYZ"].outputs["Vector"], nodes["Instance on Points"].inputs["Rotation"])
+    #
+    #
+    # Create modifier
+    # First remove it, if it already exists...
+    try:
+        bpy.data.objects.get(f"{name}-axis").modifiers.remove(bpy.data.objects.get(f"{name}-axis").modifiers.get(f"{name}-axis"))
+    except:
+        pass
+    #add modifier to the object you want. 
+    ax_mod = (bpy.data.objects.get(f"{name}-axis").modifiers.get(f"{name}-axis") or bpy.data.objects.get(f"{name}-axis").modifiers.new(f"{name}-axis", "NODES"))
+    #
+    # also, remove the node-tree if it already exists...
+    try:
+        #look in the "node_groups" data, then specify the node to be removed.
+        bpy.data.node_groups.remove(bpy.data.node_groups[f"{name}-axis"])
+    except:
+        pass
+    #
+    #
+    # HANDLE THE STUFF THAT IS UNIQUE TO A PARTICULAR AXIS  and assign nodes to the modifier
+    #
+    if name == "x":
+        sub1.inputs[1].default_value = 90 
+        links.new(rad1.outputs["Value"], nodes["Combine XYZ"].inputs["Y"])
+        ax_mod.node_group = axes_tree.copy()
+        ax_mod.node_group.name = f"{name}-axis" #rename
+        #bpy.data.node_groups[f"{name}-axis"].nodes["Set Material"].inputs["Material"].default_value = x_mat  #<- set the material
+    if name == "y":
+        sub1.inputs[1].default_value = -90 
+        links.new(rad1.outputs["Value"], nodes["Combine XYZ"].inputs["X"])
+        ax_mod.node_group = axes_tree.copy()
+        ax_mod.node_group.name = f"{name}-axis"
+        #bpy.data.node_groups['y-axis'].nodes["Set Material"].inputs["Material"].default_value = y_mat  #<- set the material
+    if name == "z":
+        sub1.inputs[1].default_value = 180 
+        links.new(rad1.outputs["Value"], nodes["Combine XYZ"].inputs["X"])
+        ax_mod.node_group = axes_tree.copy()
+        ax_mod.node_group.name = f"{name}-axis"
+        #bpy.data.node_groups['z-axis'].nodes["Set Material"].inputs["Material"].default_value = z_mat  #<- set the material
+
+
+#%% Set up camera
+camera = (bpy.data.objects.get("Camera") or bpy.data.objects.new("Camera", object_data=bpy.data.cameras.new("CameraData")))
+try:
+    Collection.objects.link(camera)
+except:
+    pass
+
+# set the camera location
+camera.location = (5.0, 5.0, 2.0)
+
+# set the camera rotation
+camera.rotation_euler = (1.3, 0.0, 2.36)
+
+#%% Set up lighting...
+#
+# create the sun
+#
+# First, try to remove things that may already exist...
+try:
+    bpy.data.lights.remove(bpy.data.lights["Sun"])
+except:
+    pass
+
+
+sun = bpy.data.objects.new("Sun", object_data=bpy.data.lights.new("Sun", type='SUN'))
+
+# add the light to the scene
+Collection.objects.link(sun)
+
+sun.rotation_euler = (0.65, 0.05, 1.9)
+bpy.data.lights["Sun"].energy = 1
+bpy.data.lights["Sun"].specular_factor = 0.75
+bpy.data.lights["Sun"].diffuse_factor = 0.75
+
+#%% Add axes labels
+for name, length in zip(ax_names, ax_scales):
+    # start by trying to remove anything that is left over...
+    try:
+        bpy.data.objects.remove(bpy.data.objects[f"{name}-label"])
+    except:
+        pass
+    #
+    try:
+        bpy.data.curves.remove(bpy.data.curves[f"{name}-label"])
+    except:
+        pass
+    #
+    # Add the new object and curves, followed by renaming them
+    #bpy.ops.object.text_add() # creates BOTH object and curve, with the name "Text"
+    #ax_text = bpy.context.active_object #immediately set this as an object...?
+    #ax_text.name = f"{name}-label"
+    #bpy.data.curves["Text"].name = f"{name}-label"
+    #
+    # add the text to the text
+    #ax_text.data.body = f"{name}-axis"
+    #
+    # MAKE THE TEXT AND OBJECT TO HOLD IT
+    #
+    # Create a new text object (it is a curve)
+    ax_curve = bpy.data.curves.new(f"{name}-label", type='FONT')
+    # supply the text you want it to display
+    ax_curve.body = f"{name}-label"
+    # Create an object to hold the text
+    ax_text = bpy.data.objects.new(f"{name}-label", ax_curve)
+    # Add the text object to the desired collection
+    Plot.objects.link(ax_text)
+    #
+    #Now, let us control the appearance. 
+    # Set the font size
+    ax_text.data.size = 0.2
+    #remove default material, and then add the x-material
+    ax_text.data.materials.clear()
+    ax_text.data.materials.append(bpy.data.materials[f"{name}-axis"])
+    #set extrude
+    ax_text.data.extrude = 0.005
+    # Set the vertical alignment to "center"
+    ax_text.data.align_y = 'CENTER'
+    #
+    # handle specifics for each axis...
+    if name == "x":
+        # Change the position of the text object
+        ax_text.location = (length + 0.35, 0, 0) #needs to be adjusted some...
+        # Change the rotation of the text object
+        ax_text.rotation_euler = (1.57, 0.0, 3.146)
+        # Set the horizontal alignment to "right"
+        ax_text.data.align_x = 'RIGHT'
+    elif name == "y":
+        # Change the position of the text object
+        ax_text.location = ( 0, length + 0.35, 0) #needs to be adjusted some...
+        # Change the rotation of the text object
+        ax_text.rotation_euler = (1.57, 0.0, 1.57)
+    else:
+        # Change the position of the text object
+        ax_text.location = (0, 0, length + 0.35) #needs to be adjusted some...
+        # Change the rotation of the text object
+        ax_text.rotation_euler = (1.57, 4.71, 2.356)
+    
+
+
+
+
+
+#%% Render image
+
+#bpy.ops.render.render() # will render, but does not produce a preview image
+
+    
