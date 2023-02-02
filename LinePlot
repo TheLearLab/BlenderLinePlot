@@ -104,6 +104,43 @@ for series in all_points:
         for i in range(3): #go through and adjust
             point[i] = (point[i] - ax_cents[i])/ax_norms[i] * ax_scales[i]
 
+#%% Set up camera
+camera = (bpy.data.objects.get("Camera") or bpy.data.objects.new("Camera", object_data=bpy.data.cameras.new("CameraData")))
+try:
+    Collection.objects.link(camera)
+except:
+    pass
+
+# set the camera location
+camera.location = (5.0, 5.0, 2.0)
+
+# set the camera rotation
+camera.rotation_euler = (1.3, 0.0, 2.36)
+
+
+#add point to the middle of the plot, and then lock camera to it. 
+#
+# create empty point
+focus = (bpy.data.objects.get("Focus") or bpy.data.objects.new("Focus", None))
+focus.empty_display_type = 'PLAIN_AXES'
+try:
+    Collection.objects.link(focus)
+except:
+    pass
+
+#place the focus at the middle of the plot...
+focus.location = (ax_scales[0]/2, ax_scales[1]/2, ax_scales[2]/2)
+
+# now lock the camera to it. 
+# Add the Track To constraint to the camera
+cam_track = camera.constraints.new(type='TRACK_TO')
+# Set the target object for the constraint
+cam_track.target = bpy.data.objects["Focus"]
+# Set the up vector for the constraint
+cam_track.up_vector = (0, 1, 0)
+# Set the track axis for the constraint
+cam_track.track_axis = 'TRACK_NEGATIVE_Z'
+
 #%% plot the data
 
 # we need to go through all the data
@@ -170,6 +207,11 @@ for i in range(n_sets):
 #
 #create a tree that will be used for data modifiers. 
 #
+try: # try to remove the node group, if it exists, because this helps not duplicate nodes
+    bpy.data.node_groups.remove(bpy.data.node_groups.get('Data'))
+except:
+    pass
+
 dataline_tree = (bpy.data.node_groups.get('Data') or bpy.data.node_groups.new('Data', 'GeometryNodeTree'))
 
 #create the input node
@@ -183,43 +225,76 @@ outNode.new(type = "NodeSocketGeometry", name = "Geometry")
 dataline_tree.nodes.new('NodeGroupOutput')
 
 #add the nodes we need in beetween
-dataline_tree.nodes.new('GeometryNodeMeshToCurve')
+# row 1
+(dataline_tree.nodes.get('GeometryNodeMeshToCurve') or dataline_tree.nodes.new('GeometryNodeMeshToCurve'))
 dataline_tree.nodes.new('GeometryNodeCurveToMesh')
-dataline_tree.nodes.new('GeometryNodeCurvePrimitiveCircle') #this is "curve circle"
+dataline_tree.nodes.new('GeometryNodeJoinGeometry')
 dataline_tree.nodes.new('GeometryNodeSetMaterial')
+dataline_tree.nodes.new('GeometryNodeSetShadeSmooth') 
+#
+# row 2
+dataline_tree.nodes.new('ShaderNodeValue')# value
+mult1 = dataline_tree.nodes.new('ShaderNodeMath')#multiply
+mult1.operation = 'MULTIPLY'#change to multiply# multiply
+dataline_tree.nodes.new('GeometryNodeCurvePrimitiveCircle') #this is "curve circle"
+#
+# row 3
+dataline_tree.nodes.new('GeometryNodeMeshIcoSphere')
+dataline_tree.nodes.new('GeometryNodeInstanceOnPoints')# instance on points
 
 
 #now that we have created all the nodes, we create a variable for them...
 nodes = dataline_tree.nodes #get a variable for the nodes...
 
 #set default values
-nodes["Curve Circle"].inputs[4].default_value = 0.05 # set the size
+#row 1
 nodes["Curve to Mesh"].inputs[2].default_value = True # set to fill ends of line
+#row 2
+nodes["Value"].outputs[0].default_value = 0.066
+mult1.inputs[1].default_value = 0.66
+#nodes["Curve Circle"].inputs[4].default_value = 0.05 # set the size set by value now...
+nodes["Ico Sphere"].inputs["Subdivisions"].default_value = 3
+
 
 #arrange nodes
+# row 1
 nodes["Mesh to Curve"].location.x += 200
 nodes["Curve to Mesh"].location.x += 400
-nodes['Set Material'].location.x += 600
-nodes["Group Output"].location.x += 800
+nodes["Join Geometry"].location.x += 600
+nodes['Set Material'].location.x += 800
+nodes['Set Shade Smooth'].location.x += 1000
+nodes["Group Output"].location.x += 1200
+#row 2
+nodes["Value"].location.x += -200
+nodes["Value"].location.y -=200
+nodes["Multiply"].location.y -= 200
 nodes["Curve Circle"].location.x += 200
 nodes["Curve Circle"].location.y -= 200
-
+#row3
+nodes["Ico Sphere"].location.y -= 400
+nodes["Instance on Points"].location.x += 200
+nodes["Instance on Points"].location.y -= 400
 
 # connect
 links = dataline_tree.links # get a variable for the links...
 #connect input and output nodes
-links.new(nodes["Group Input"].outputs["Geometry"], nodes['Mesh to Curve'].inputs["Mesh"])
-links.new(nodes["Mesh to Curve"].outputs["Curve"], nodes["Curve to Mesh"].inputs["Curve"]) 
+#row 1
+links.new(nodes["Group Input"].outputs["Geometry"],     nodes['Mesh to Curve'].inputs["Mesh"])
+links.new(nodes["Group Input"].outputs["Geometry"],     nodes['Instance on Points'].inputs["Points"])
+links.new(nodes["Mesh to Curve"].outputs["Curve"],      nodes["Curve to Mesh"].inputs["Curve"]) 
+links.new(nodes["Curve to Mesh"].outputs["Mesh"],       nodes["Join Geometry"].inputs["Geometry"])
+links.new(nodes["Join Geometry"].outputs["Geometry"],   nodes["Set Material"].inputs["Geometry"])
+links.new(nodes["Set Material"].outputs["Geometry"],    nodes["Set Shade Smooth"].inputs["Geometry"])
+links.new(nodes["Set Shade Smooth"].outputs["Geometry"], nodes["Group Output"].inputs["Geometry"])
+# row 2
+links.new(nodes["Value"].outputs["Value"],  mult1.inputs[0])
+links.new(nodes["Value"].outputs["Value"],  nodes["Ico Sphere"].inputs["Radius"])
+links.new(mult1.outputs["Value"],           nodes["Curve Circle"].inputs["Radius"])
 links.new(nodes["Curve Circle"].outputs["Curve"], nodes["Curve to Mesh"].inputs["Profile Curve"]) 
-links.new(nodes["Curve to Mesh"].outputs["Mesh"], nodes["Set Material"].inputs["Geometry"])
-links.new(nodes["Set Material"].outputs["Geometry"], nodes["Group Output"].inputs["Geometry"])
+# row 3
+links.new(nodes["Ico Sphere"].outputs["Mesh"],                  nodes["Instance on Points"].inputs["Instance"])
+links.new(nodes["Instance on Points"].outputs["Instances"],     nodes["Join Geometry"].inputs["Geometry"])
 
-
-#
-# make the geometry nodes...
-#
-#add the geometry node modifier to the object
-#D_mod = Data.modifiers.new("Data", "NODES")
 
 #
 # Now, assign this to the objects of interest... 
@@ -372,7 +447,7 @@ for name, scale in zip(ax_names, ax_scales):
     axes_tree.nodes.new('NodeGroupOutput')
     #                           
     #add the nodes we need in beetween
-    # top row...
+    # row 1
     axes_tree.nodes.new('GeometryNodeMeshToCurve')
     axes_tree.nodes.new('GeometryNodeCurveToMesh')
     axes_tree.nodes.new('GeometryNodeJoinGeometry')
@@ -527,20 +602,6 @@ for name, scale in zip(ax_names, ax_scales):
         ax_mod.node_group.name = f"{name}-axis"
         #bpy.data.node_groups['z-axis'].nodes["Set Material"].inputs["Material"].default_value = z_mat  #<- set the material
 
-
-#%% Set up camera
-camera = (bpy.data.objects.get("Camera") or bpy.data.objects.new("Camera", object_data=bpy.data.cameras.new("CameraData")))
-try:
-    Collection.objects.link(camera)
-except:
-    pass
-
-# set the camera location
-camera.location = (5.0, 5.0, 2.0)
-
-# set the camera rotation
-camera.rotation_euler = (1.3, 0.0, 2.36)
-
 #%% Set up lighting...
 #
 # create the sun
@@ -605,6 +666,15 @@ for name, length in zip(ax_names, ax_scales):
     ax_text.data.extrude = 0.005
     # Set the vertical alignment to "center"
     ax_text.data.align_y = 'CENTER'
+    #
+    # add the track lock, so that the text follows the camera. 
+    ax_lock = ax_text.constraints.new(type='LOCKED_TRACK')
+    # Set the target object for the constraint
+    ax_lock.target = bpy.data.objects["Camera"]
+    # Set the track axis for the constraint
+    ax_lock.track_axis = 'TRACK_Z'
+    # Set the lock axis for the constraint
+    ax_lock.lock_axis = 'LOCK_X'
     #
     # handle specifics for each axis...
     if name == "x":
